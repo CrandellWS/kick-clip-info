@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clip Info Lookup</title>
+<meta name="description" content="Paste a Kick clip link to see who clipped it, when, and from which stream.">
+<style>
+:root{--bg:#0f1115;--panel:#181b22;--ink:#eef0f4;--muted:#9aa3b2;--line:#2a2f3a;--accent:#53fc18;--bad:#ff6b6b}
+@media (prefers-color-scheme:light){:root{--bg:#f5f6f8;--panel:#fff;--ink:#14171c;--muted:#5b6472;--line:#dde1e7;--accent:#1f8a00;--bad:#c62828}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:720px;margin:0 auto;padding:32px 16px 64px;display:flex;flex-direction:column;gap:20px}
+h1{margin:0;font-size:1.8rem}
+p{margin:0;color:var(--muted)}
+form{display:flex;gap:8px;flex-wrap:wrap}
+input{flex:1 1 320px;min-width:0;padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--ink);font-size:1rem}
+button{padding:12px 20px;border-radius:10px;border:0;background:var(--accent);color:#000;font-weight:700;font-size:1rem;cursor:pointer}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:14px}
+.who{display:flex;align-items:center;gap:14px}
+.who img{width:56px;height:56px;border-radius:50%;object-fit:cover;background:var(--line)}
+.who .label{font-size:.85rem;color:var(--muted)}
+.who a{font-size:1.5rem;font-weight:800;color:var(--accent);text-decoration:none;word-break:break-word}
+.thumb{width:100%;border-radius:10px;aspect-ratio:16/9;object-fit:cover;background:var(--line)}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;margin:0}
+dt{color:var(--muted)}
+dd{margin:0;word-break:break-word}
+dd a{color:var(--ink)}
+.err{color:var(--bad)}
+small{color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Clip Info Lookup</h1>
+  <p>Paste a Kick clip link to see who clipped it, when, and from which stream.</p>
+  <form id="f">
+    <input id="q" placeholder="https://kick.com/channel/clips/clip_..." autocomplete="off" aria-label="Clip link or clip ID">
+    <button>Look up</button>
+  </form>
+  <div id="out" aria-live="polite"></div>
+  <small>Uses Kick's public clip information. Not affiliated with Kick.</small>
+</main>
+<script>
+const out = document.getElementById('out');
+const q = document.getElementById('q');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const when = iso => iso ? new Date(iso).toLocaleString() : '—';
+const hms = s => { s = Math.max(0, Math.floor(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return (h ? h + 'h ' : '') + (h || m ? m + 'm ' : '') + x + 's'; };
+
+async function lookup(raw) {
+  const id = (raw.match(/clip_[A-Za-z0-9]+/) || [])[0];
+  if (!id) { out.innerHTML = '<p class="err">That doesn\'t look like a Kick clip link. It should contain "clip_".</p>'; return; }
+  out.innerHTML = '<p>Looking up…</p>';
+  history.replaceState(null, '', '?clip=' + id);
+  try {
+    const r = await fetch('https://kick.com/api/v2/clips/' + id, { headers: { Accept: 'application/json' } });
+    if (!r.ok) throw new Error(r.status === 404 ? 'Clip not found (it may have been deleted).' : 'Kick answered ' + r.status + '.');
+    const c = (await r.json()).clip;
+    const u = c.creator || {}, ch = c.channel || {};
+    out.innerHTML = `<div class="card">
+      <div class="who">${u.profile_picture ? `<img src="${esc(u.profile_picture)}" alt="">` : ''}
+        <div><div class="label">Clipped by</div><a href="https://kick.com/${esc(u.slug)}" target="_blank" rel="noopener">${esc(u.username || 'unknown')}</a></div></div>
+      ${c.thumbnail_url ? `<img class="thumb" src="${esc(c.thumbnail_url)}" alt="Clip thumbnail">` : ''}
+      <dl>
+        <dt>Title</dt><dd>${esc(c.title)}</dd>
+        <dt>Channel</dt><dd><a href="https://kick.com/${esc(ch.slug)}" target="_blank" rel="noopener">${esc(ch.username)}</a></dd>
+        <dt>Clipped at</dt><dd>${esc(when(c.created_at))}</dd>
+        <dt>Length</dt><dd>${esc(hms(c.duration))}</dd>
+        <dt>In the stream at</dt><dd>${c.vod_starts_at != null ? esc(hms(c.vod_starts_at)) + ' in' : '—'}</dd>
+        <dt>Category</dt><dd>${esc(c.category?.name || '—')}</dd>
+        <dt>Views / likes</dt><dd>${esc(c.views ?? c.view_count ?? 0)} / ${esc(c.likes ?? c.likes_count ?? 0)}</dd>
+        <dt>Clip link</dt><dd><a href="https://kick.com/${esc(ch.slug)}/clips/${esc(c.id)}" target="_blank" rel="noopener">${esc(c.id)}</a></dd>
+      </dl></div>`;
+  } catch (e) {
+    out.innerHTML = `<p class="err">Couldn't load that clip. ${esc(e.message)}</p>
+      <p>Backup: open <a href="https://kick.com/api/v2/clips/${esc(id)}" target="_blank" rel="noopener">this link</a> and look for "creator" → "username".</p>`;
+  }
+}
+document.getElementById('f').addEventListener('submit', e => { e.preventDefault(); lookup(q.value.trim()); });
+const pre = new URLSearchParams(location.search).get('clip');
+if (pre) { q.value = pre; lookup(pre); }
+</script>
+</body>
+</html>
